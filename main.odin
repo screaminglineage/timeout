@@ -1,9 +1,12 @@
 package main
 
+import "base:intrinsics"
+import "core:encoding/cbor"
 import "core:fmt"
 import "core:os"
-import "core:strings"
+import "core:reflect"
 import "core:strconv"
+import "core:strings"
 import "core:time"
 import "core:time/datetime"
 
@@ -21,6 +24,8 @@ parse_datetime_string :: proc(datetime_string: string) -> (datetime.DateTime, bo
         fmt.eprintln("Error: invalid date")
         return datetime.DateTime{}, false
     }
+
+    // TODO: could add support for formats like `2025-jan` and `14[th] jan 2025` (?)
     year, year_ok := strconv.parse_int(date_elements[0])
     month, month_ok := strconv.parse_int(date_elements[1])
     day, day_ok := strconv.parse_int(date_elements[2])
@@ -31,7 +36,7 @@ parse_datetime_string :: proc(datetime_string: string) -> (datetime.DateTime, bo
         return datetime.DateTime{}, false
     }
     // TODO: add support for passing in hour/min/sec
-    // TODO: look into adding TimeZone info (currently stores time as UTC)
+    // TODO: look into adding TimeZone info (currently only supports UTC)
     date, err := datetime.components_to_datetime(year, month, day, hour=0, minute=0, second=0)
     if err != nil {
         fmt.eprintln("Error: invalid date:", err)
@@ -64,12 +69,40 @@ get_progress_ratio :: proc(task: Task) -> f64 {
     start_time_unix := time.time_to_unix(start_time)
     now := time.time_to_unix(time.now())
 
-    // https://pkg.odin-lang.org/core/time/#Time
+    // NOTE: see https://pkg.odin-lang.org/core/time/#Time for the range of Time
     assert(end_time_ok && start_time_ok, "year 2262 problem is still ways off! ...right??...\n")
     return f64(now - start_time_unix)/f64(end_time_unix - start_time_unix)
 }
 
+initialize_cbor :: proc() {
+    cbor_tag :: cbor.TAG_EPOCH_TIME_NR
+
+    impl := cbor.Tag_Implementation {
+        marshal = proc(self: ^cbor.Tag_Implementation, e: cbor.Encoder, v: any) -> cbor.Marshal_Error {
+            datetime := v.(datetime.DateTime)
+            time := time.datetime_to_time(datetime) or_else panic("datetime was validated before this")
+            cbor._encode_u8(e.writer, cbor_tag, .Tag) or_return
+            return cbor.err_conv(cbor._encode_bytes(e, reflect.as_bytes(v)))
+        },
+        unmarshal = proc(self: ^cbor.Tag_Implementation, d: cbor.Decoder, tag_nr: u64, v: any) -> cbor.Unmarshal_Error {
+            header := cbor._decode_header(d.reader) or_return
+            major, add := cbor._header_split(header)
+            if major != .Bytes {
+                return .Bad_Tag_Value
+            }
+            bytes := cbor.err_conv(cbor._decode_bytes(d, add, major)) or_return
+            intrinsics.mem_copy_non_overlapping(v.data, raw_data(bytes), len(bytes))
+            return nil
+        }
+    }
+
+    cbor.tag_register_type(impl, cbor_tag, typeid_of(datetime.DateTime))
+}
+
+
 main :: proc() {
+    initialize_cbor()
+
     args := os.args[1:]
     if len(args) < 2 {
         fmt.println("Not enough arguments")
@@ -82,6 +115,21 @@ main :: proc() {
     fmt.println("Task created with end date of:", task.end_date.date)
 
     progress_ratio := get_progress_ratio(task)
-    fmt.printf("Done: %.2f%%\n", progress_ratio * 100)
+    fmt.printf("Progress: Done: %.2f%%, ", progress_ratio * 100)
     fmt.printf("Left: %.2f%%\n", (1-progress_ratio) * 100)
+
+
+    bytes, err := cbor.marshal(task)
+    if err != nil {
+        fmt.println("Error:", err)
+    }
+    fmt.println("Encoded into", len(bytes), "bytes")
+    defer delete(bytes)
+
+    decoded_task := Task{}
+    if decode_err := cbor.unmarshal(string(bytes), &decoded_task); decode_err != nil {
+        fmt.println("Error:", decode_err)
+        return
+    }
+    fmt.println(decoded_task)
 }
