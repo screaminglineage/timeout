@@ -10,6 +10,9 @@ import "core:strings"
 import "core:time"
 import "core:time/datetime"
 
+// TODO: grab from an environment variable
+TASKS_FILE_PATH :: "timeout-tasks.cbor"
+
 Task :: struct {
     name: string,
     start_date: datetime.DateTime,
@@ -118,15 +121,23 @@ main :: proc() {
     fmt.printf("Progress: Done: %.2f%%, ", progress_ratio * 100)
     fmt.printf("Left: %.2f%%\n", (1-progress_ratio) * 100)
 
-    bytes, err := cbor.marshal(task, cbor.ENCODE_SMALL|cbor.Encoder_Flags{.Self_Described_CBOR})
+    binary, err := cbor.marshal(task, cbor.ENCODE_SMALL|cbor.Encoder_Flags{.Self_Described_CBOR})
     if err != nil {
         fmt.println("Error:", err)
     }
-    fmt.println("Encoded into", len(bytes), "bytes")
-    defer delete(bytes)
+    fmt.println("Encoded into", len(binary), "bytes")
+    defer delete(binary)
+
+    // TODO: check how to return an error exit code without os.exit() as that wont call defers
+    if write_err := os.write_entire_file_or_err(TASKS_FILE_PATH, binary); err != nil {
+        fmt.println("Error:", write_err)
+        return
+    }
+    fmt.println("Generated:", TASKS_FILE_PATH)
 
     decoded_task := Task{}
-    if decode_err := cbor.unmarshal(string(bytes), &decoded_task); decode_err != nil {
+    // TODO: check how to return an error exit code without os.exit() as that wont call defers
+    if decode_err := cbor.unmarshal(string(binary), &decoded_task); decode_err != nil {
         fmt.println("Error:", decode_err)
         return
     }
