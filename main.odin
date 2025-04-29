@@ -118,8 +118,7 @@ main :: proc() {
     fmt.printf("Progress: Done: %.2f%%, ", progress_ratio * 100)
     fmt.printf("Left: %.2f%%\n", (1-progress_ratio) * 100)
 
-
-    bytes, err := cbor.marshal(task)
+    bytes, err := cbor.marshal(task, cbor.ENCODE_SMALL|cbor.Encoder_Flags{.Self_Described_CBOR})
     if err != nil {
         fmt.println("Error:", err)
     }
