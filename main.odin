@@ -3,6 +3,7 @@ package main
 import "base:intrinsics"
 import "core:encoding/cbor"
 import "core:fmt"
+import "core:flags"
 import "core:os"
 import "core:reflect"
 import "core:strconv"
@@ -185,6 +186,18 @@ initialize_cbor :: proc() {
 }
 
 main :: proc() {
+    Options :: struct {
+        name: string        `args:"name=n,required" usage:"name of the task"`,
+        date: string        `args:"name=d,required" usage:"date of the task"`,
+        list: bool          `args:"name=l" usage:"list all tasks"`,
+        remove: string      `args:"name=r" usage:"remove task by name"`,
+        search: string      `args:"name=s" usage:"search and display task by name"`,
+        remove_all: string  `args:"name=R" usage:"remove all tasks from file"`,
+        file: os.Handle     `args:"name=f" usage:"specify tasks file"`
+    }
+    options: Options
+    flags.parse_or_exit(&options, os.args[:], flags.Parsing_Style.Unix)
+
     initialize_cbor()
     tasks, loaded := tasks_load(TASKS_FILE_PATH)
     defer delete(tasks)
@@ -192,20 +205,19 @@ main :: proc() {
         os.exit(1) 
     }
 
-    // TODO: use flags library for command line parsing
-    when (false) {
-        args := os.args[1:]
-        if len(args) < 2 {
-            fmt.println("Error: not enough arguments")
-            os.exit(1)
-        }
-        task, created := task_create(os.args[1], os.args[2])
-        if !created {
-            os.exit(1)
-        }
-        append(&tasks, task)
-        fmt.println("Task created with end date of:", task.end_date.date)
+    task, created := task_create(options.name, options.date)
+    if !created {
+        os.exit(1)
     }
+    append(&tasks, task)
+    fmt.println("Task created with end date of:", task.end_date.date)
+
+    if options.list {
+        tasks_display(tasks[:], 30)
+    }
+    // TODO: implement remove and remove-all
+    // TODO: implement search
+    // TODO: implement file selection through cli
 
     saved := tasks_save(tasks[:], TASKS_FILE_PATH)
     if !saved {
