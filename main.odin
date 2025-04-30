@@ -23,6 +23,7 @@ parse_datetime_string :: proc(datetime_string: string) -> (datetime.DateTime, bo
     // TODO: add support for parsing time strings like
     // 2026 (default to 2026-01-01) and 2026-05 (default to 2026-05-01)
     date_elements := strings.split(datetime_string, "-")
+    defer delete(date_elements)
     if len(date_elements) != 3 {
         fmt.eprintln("Error: invalid date")
         return datetime.DateTime{}, false
@@ -102,44 +103,69 @@ initialize_cbor :: proc() {
     cbor.tag_register_type(impl, cbor_tag, typeid_of(datetime.DateTime))
 }
 
+tasks_load :: proc(tasks_file_path: string) -> (tasks: [dynamic]Task, ok: bool) {
+    if os.exists(tasks_file_path) {
+        tasks_data, read_ok := os.read_entire_file(tasks_file_path)
+        if !read_ok {
+            fmt.println("Error: failed to read file")
+            return
+        }
+        defer delete(tasks_data)
+        fmt.println("Opened file:", tasks_file_path)
+        if decode_err := cbor.unmarshal(string(tasks_data), &tasks); decode_err != nil {
+            fmt.println("Error:", decode_err)
+            return
+        }
+    }
+    fmt.println("Read tasks file with", len(tasks), "tasks")
+    ok = true
+    return
+}
+
+tasks_save :: proc(tasks: [dynamic]Task, tasks_file_path: string) -> (ok: bool) {
+    binary, err := cbor.marshal(tasks, cbor.ENCODE_SMALL|cbor.Encoder_Flags{.Self_Described_CBOR})
+    if err != nil {
+        fmt.println("Error:", err)
+        return
+    }
+    defer delete(binary)
+    fmt.println("Encoded into", len(binary), "bytes")
+
+    if write_err := os.write_entire_file_or_err(TASKS_FILE_PATH, binary); err != nil {
+        fmt.println("Error:", write_err)
+        return
+    }
+    fmt.println("Generated:", TASKS_FILE_PATH)
+    ok = true
+    return
+}
+
 
 main :: proc() {
     initialize_cbor()
+    tasks, loaded := tasks_load(TASKS_FILE_PATH)
+    if !loaded {
+        os.exit(1) 
+    }
 
     args := os.args[1:]
     if len(args) < 2 {
-        fmt.println("Not enough arguments")
+        fmt.println("Error: not enough arguments")
         os.exit(1)
     }
-    task, ok := create_task(os.args[1], os.args[2])
-    if !ok {
+    task, created := create_task(os.args[1], os.args[2])
+    if !created {
         os.exit(1)
     }
+    append(&tasks, task)
     fmt.println("Task created with end date of:", task.end_date.date)
 
     progress_ratio := get_progress_ratio(task)
     fmt.printf("Progress: Done: %.2f%%, ", progress_ratio * 100)
     fmt.printf("Left: %.2f%%\n", (1-progress_ratio) * 100)
 
-    binary, err := cbor.marshal(task, cbor.ENCODE_SMALL|cbor.Encoder_Flags{.Self_Described_CBOR})
-    if err != nil {
-        fmt.println("Error:", err)
+    saved := tasks_save(tasks, TASKS_FILE_PATH)
+    if !saved {
+        os.exit(1)
     }
-    fmt.println("Encoded into", len(binary), "bytes")
-    defer delete(binary)
-
-    // TODO: check how to return an error exit code without os.exit() as that wont call defers
-    if write_err := os.write_entire_file_or_err(TASKS_FILE_PATH, binary); err != nil {
-        fmt.println("Error:", write_err)
-        return
-    }
-    fmt.println("Generated:", TASKS_FILE_PATH)
-
-    decoded_task := Task{}
-    // TODO: check how to return an error exit code without os.exit() as that wont call defers
-    if decode_err := cbor.unmarshal(string(binary), &decoded_task); decode_err != nil {
-        fmt.println("Error:", decode_err)
-        return
-    }
-    fmt.println(decoded_task)
 }
