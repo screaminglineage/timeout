@@ -3,6 +3,6 @@
 # Requires https://github.com/mstorsjo/msvc-wine installed at /opt/
 
 odin build . -target:windows_amd64 -build-mode:object
-/opt/msvc/bin/x64/link "*.obj" /out:timeout.exe /subsystem:console msvcrt.lib shell32.lib
+/opt/msvc/bin/x64/link "*.obj" /out:timeout.exe /subsystem:console msvcrt.lib shell32.lib Ws2_32.lib
 rm *.obj
 

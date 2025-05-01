@@ -1,9 +1,11 @@
 package main
 
 import "base:intrinsics"
+import "core:bufio"
 import "core:encoding/cbor"
-import "core:fmt"
 import "core:flags"
+import "core:fmt"
+import "core:log"
 import "core:os"
 import "core:reflect"
 import "core:strconv"
@@ -12,11 +14,13 @@ import "core:time"
 import "core:time/datetime"
 
 // TODO: grab from an environment variable
-TASKS_FILE_PATH :: "timeout-tasks.cbor"
+DEFAULT_TASKS_FILE :: "timeout-tasks.cbor"
 
 parse_datetime_string :: proc(datetime_string: string) -> (datetime.DateTime, bool) {
     // TODO: add support for parsing time strings like
-    // 2026 (default to 2026-01-01) and 2026-05 (default to 2026-05-01)
+    // 2026 (short for 2026-01-01) and 2026-05 (short for 2026-05-01)
+    // TODO: add support for formats like `2025-jan` (short for 2025-01-01)
+    // and `14[th] jan 2025`
     date_elements := strings.split(datetime_string, "-")
     defer delete(date_elements)
     if len(date_elements) != 3 {
@@ -24,7 +28,6 @@ parse_datetime_string :: proc(datetime_string: string) -> (datetime.DateTime, bo
         return datetime.DateTime{}, false
     }
 
-    // TODO: could add support for formats like `2025-jan` and `14[th] jan 2025` (?)
     year, year_ok := strconv.parse_int(date_elements[0])
     month, month_ok := strconv.parse_int(date_elements[1])
     day, day_ok := strconv.parse_int(date_elements[2])
@@ -51,7 +54,7 @@ Task :: struct {
 }
 
 // Temporary function for testing
-task_new :: proc(name: string, start_date: datetime.Date, end_date: datetime.Date) -> Task {
+_task_new :: proc(name: string, start_date: datetime.Date, end_date: datetime.Date) -> Task {
     return Task {
         name = name,
         start_date = {start_date, datetime.Time{}, nil},
@@ -89,6 +92,24 @@ task_get_progress :: proc(task: Task) -> (ratio_done: f64, duration_left: dateti
     return
 }
 
+task_display :: proc(task: Task, max_progress_value: int = 50) {
+    ratio_done, duration_left := task_get_progress(task)
+    progress_bar := render_progress_bar(ratio_done, max_progress_value)
+    progress_left := (1 - ratio_done) * 100
+
+    delta_to_days_hrs_mins :: proc(delta: datetime.Delta) -> (days, hours, mins: i64) {
+        days_rounded := delta.days
+        hours_ := f64(delta.seconds)/(60*60)
+        hours_rounded := i64(hours_)
+        mins_rounded := i64((hours_ - f64(hours_rounded))*60)
+        return days_rounded, hours_rounded, mins_rounded
+    }
+
+    fmt.printfln("%s: %s (%.2f %% left) (%d days %d hours and %d minutes to go!) ",
+        task.name, progress_bar, progress_left, delta_to_days_hrs_mins(duration_left))
+}
+
+
 tasks_load :: proc(tasks_file_path: string) -> (tasks: [dynamic]Task, ok: bool) {
     if os.exists(tasks_file_path) {
         tasks_data, read_ok := os.read_entire_file(tasks_file_path)
@@ -97,13 +118,13 @@ tasks_load :: proc(tasks_file_path: string) -> (tasks: [dynamic]Task, ok: bool) 
             return
         }
         defer delete(tasks_data)
-        fmt.println("Opened file:", tasks_file_path)
+        log.debug("Opened file:", tasks_file_path)
         if decode_err := cbor.unmarshal(string(tasks_data), &tasks); decode_err != nil {
             fmt.println("Error:", decode_err)
             return
         }
     }
-    fmt.println("Read tasks file with", len(tasks), "tasks")
+    log.debug("Read tasks file with", len(tasks), "tasks")
     ok = true
     return
 }
@@ -116,32 +137,12 @@ tasks_save :: proc(tasks: []Task, tasks_file_path: string) -> (ok: bool) {
     }
     defer delete(binary)
 
-    if write_err := os.write_entire_file_or_err(TASKS_FILE_PATH, binary); err != nil {
+    if write_err := os.write_entire_file_or_err(tasks_file_path, binary); err != nil {
         fmt.println("Error:", write_err)
         return
     }
-    fmt.println("Generated:", TASKS_FILE_PATH)
     ok = true
     return
-}
-
-tasks_display :: proc(tasks: []Task, max_progress_value: int = 50) {
-    for task in tasks {
-        ratio_done, duration_left := task_get_progress(task)
-        progress_bar := render_progress_bar(ratio_done, max_progress_value)
-        progress_left := (1 - ratio_done) * 100
-
-        delta_to_days_hrs_mins :: proc(delta: datetime.Delta) -> (days, hours, mins: i64) {
-            days_rounded := delta.days
-            hours_ := f64(delta.seconds)/(60*60)
-            hours_rounded := i64(hours_)
-            mins_rounded := i64((hours_ - f64(hours_rounded))*60)
-            return days_rounded, hours_rounded, mins_rounded
-        }
-
-        fmt.printfln("%s: %s (%.2f %% left) (%d days %d hours and %d minutes to go!) ",
-            task.name, progress_bar, progress_left, delta_to_days_hrs_mins(duration_left))
-    }
 }
 
 render_progress_bar :: proc(progress_ratio: f64, max_slots: int = 100) -> string {
@@ -185,42 +186,137 @@ initialize_cbor :: proc() {
     cbor.tag_register_type(impl, cbor_tag, typeid_of(datetime.DateTime))
 }
 
-main :: proc() {
+read_lowercase_line_from_stdin :: proc() -> string {
+    reader: bufio.Reader
+    bufio.reader_init(&reader, os.stream_from_handle(os.stdin))
+    buf := bufio.reader_read_slice(&reader, '\n') or_else panic("failed to read from stdin")
+    return strings.to_lower(strings.trim_space(string(buf[:])))
+}
+
+run :: proc() -> bool {
+    context.logger = log.create_console_logger(opt={.Level,.Terminal_Color})
     Options :: struct {
-        name: string        `args:"name=n,required" usage:"name of the task"`,
-        date: string        `args:"name=d,required" usage:"date of the task"`,
-        list: bool          `args:"name=l" usage:"list all tasks"`,
-        remove: string      `args:"name=r" usage:"remove task by name"`,
-        search: string      `args:"name=s" usage:"search and display task by name"`,
-        remove_all: string  `args:"name=R" usage:"remove all tasks from file"`,
-        file: os.Handle     `args:"name=f" usage:"specify tasks file"`
+        name: string        `args:"name=n," usage:"name of the task to be added"`,
+        date: string        `args:"name=d," usage:"date of the task to be added"`,
+        list: bool          `args:"name=l"  usage:"list all tasks"`,
+        remove: string      `args:"name=r"  usage:"remove task by name"`,
+        search: string      `args:"name=s"  usage:"search and display task by name"`,
+        remove_all: bool    `args:"name=R"  usage:"remove all tasks from file"`,
+        file: string        `args:"name=f"  usage:"specify tasks file"`
     }
+    parsing_style := flags.Parsing_Style.Unix
     options: Options
-    flags.parse_or_exit(&options, os.args[:], flags.Parsing_Style.Unix)
+    flags.parse_or_exit(&options, os.args[:], parsing_style)
+
+    // Print usage when no arguments are passed in
+    if len(os.args) == 1 {
+        flags.write_usage(os.stream_from_handle(os.stdin), Options, os.args[0], parsing_style)
+        return false
+    }
 
     initialize_cbor()
-    tasks, loaded := tasks_load(TASKS_FILE_PATH)
+    log.debug("Initialized CBOR")
+
+    tasks_file_path := DEFAULT_TASKS_FILE
+    if options.file != "" {
+        tasks_file_path = options.file
+    }
+
+    tasks, loaded := tasks_load(tasks_file_path)
     defer delete(tasks)
     if !loaded {
-        os.exit(1) 
+        return false
     }
+    tasks_modified := false
 
-    task, created := task_create(options.name, options.date)
-    if !created {
-        os.exit(1)
+    if options.name != "" && options.date != "" {
+        task, created := task_create(options.name, options.date)
+        if !created {
+            return false
+        }
+        tasks_modified = true
+        append(&tasks, task)
+        log.debug("Task created with end date of:", task.end_date.date)
     }
-    append(&tasks, task)
-    fmt.println("Task created with end date of:", task.end_date.date)
 
     if options.list {
-        tasks_display(tasks[:], 30)
+        if len(tasks) == 0 {
+            fmt.println("No tasks to list")
+        } else {
+            for task in tasks {
+                // TODO: align tasks properly
+                task_display(task, 30)
+            }
+        }
     }
-    // TODO: implement remove and remove-all
-    // TODO: implement search
-    // TODO: implement file selection through cli
 
-    saved := tasks_save(tasks[:], TASKS_FILE_PATH)
-    if !saved {
+    if options.search != "" {
+        found := false
+        for task in tasks {
+            if strings.contains(task.name, options.search) {
+                found = true
+                // TODO: align tasks properly
+                task_display(task, 30)
+            }
+        }
+        if !found {
+            fmt.printfln("No task with name '%s' was found", options.search)
+            return false
+        }
+    }
+
+    if options.remove != "" {
+        found := false
+        to_remove: [dynamic]string
+        defer delete(to_remove)
+        #reverse for task, i in tasks {
+            if strings.contains(task.name, options.remove) {
+                found = true
+                append(&to_remove, task.name)
+                unordered_remove(&tasks, i)
+            }
+        }
+        if !found {
+            fmt.printfln("No task with name '%s' was found", options.remove)
+            return false
+        }
+
+        fmt.println("The following tasks will be removed:")
+        for task_name, i in to_remove {
+            fmt.printfln("[%d]. %s", i+1, task_name)
+        }
+        fmt.print("Are you sure? [y/N]: ")
+        input := read_lowercase_line_from_stdin()
+        defer delete(input)
+        if input == "yes" || input == "y" {
+            tasks_modified = true
+            fmt.printfln("Task(s) deleted")
+        }
+    }
+
+    if options.remove_all {
+        fmt.print("Remove all tasks? [y/N]: ")
+        input := read_lowercase_line_from_stdin()
+        defer delete(input)
+        if input == "yes" || input == "y" {
+            tasks_modified = true
+            clear(&tasks)
+            fmt.println("Removed all tasks")
+        }
+    }
+
+    if tasks_modified {
+        saved := tasks_save(tasks[:], tasks_file_path)
+        if !saved {
+            return false
+        }
+        log.debug("Saved tasks in:", tasks_file_path)
+    }
+    return true
+}
+
+main :: proc() {
+    if ok := run(); !ok {
         os.exit(1)
     }
 }
