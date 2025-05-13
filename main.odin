@@ -95,7 +95,8 @@ task_get_progress :: proc(task: Task) -> (ratio_done: f64, duration_left: dateti
 task_display :: proc(task: Task, max_progress_value: int = 50) {
     ratio_done, duration_left := task_get_progress(task)
     progress_bar := render_progress_bar(ratio_done, max_progress_value)
-    progress_left := (1 - ratio_done) * 100
+    progress_done := ratio_done * 100
+    // progress_left := (1 - ratio_done) * 100
 
     delta_to_days_hrs_mins :: proc(delta: datetime.Delta) -> (days, hours, mins: i64) {
         days_rounded := delta.days
@@ -105,8 +106,8 @@ task_display :: proc(task: Task, max_progress_value: int = 50) {
         return days_rounded, hours_rounded, mins_rounded
     }
 
-    fmt.printfln("%s: %s (%.2f %% left) (%d days %d hours and %d minutes to go!) ",
-        task.name, progress_bar, progress_left, delta_to_days_hrs_mins(duration_left))
+    fmt.printfln("%s: %s (%.2f %% done) (%d days %d hours and %d minutes to go!) ",
+        task.name, progress_bar, progress_done, delta_to_days_hrs_mins(duration_left))
 }
 
 
